@@ -8,10 +8,14 @@ import matplotlib.patches as mpatches
 import warnings
 import copy
 import os
+
 warnings.filterwarnings("ignore")
 
 
 def main():
+    test_icp()
+
+def test_icp():
     print('Iteration Cloest Point')
     plt.ion()
     inst = IterativeClosestPoint(0.1, 0.01)
@@ -22,7 +26,6 @@ def main():
     x = translate_2d(x, 5, 5)
     del x[0]
     inst.iterative_closest_point(p, x, [1, 0, 0, 0, 0, 0, 0], 10)
-
 
 class IterativeClosestPoint:
     def __init__(self, zero_threshold, convergence_threshold):
@@ -136,7 +139,7 @@ class IterativeClosestPoint:
 
         plt.figure(1)
         plt.waitforbuttonpress()
-        self.total_distances.clear()
+        del self.total_distances[:]
         if self.debug_print is False:
             sys.stdout = sys.__stdout__
 
