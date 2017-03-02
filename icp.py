@@ -6,36 +6,64 @@ from munkres import Munkres
 import random
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
+
 import warnings
 import copy
 import os
-
-
-
+# Ros specific
+import rospy
+from roslib import message
+import sensor_msgs.point_cloud2 as PCL
+from sensor_msgs.msg import PointCloud2
+from roslib import message
 warnings.filterwarnings("ignore")
 
 
 def main():
-    test_icp()
+    #test_icp()
+    m = MapBuilder()
 
-def test_icp():
-    print('Iteration Cloest Point')
-    plt.ion()
-    inst = IterativeClosestPoint(0.1, 0.01)
-    p = read_coordinate_file('l_shape_3d.txt')
 
-    x = read_coordinate_file('l_shape_3d.txt')
-    x = rotate_2d((0, 0), x, 75)
-    x = translate_2d(x, 5, 5)
-    del x[0]
-    inst.iterative_closest_point(p, x, [1, 0, 0, 0, 0, 0, 0], 10)
+class MapBuilder:
+    def __init__(self):
+        self.icp = IterativeClosestPoint(zero_threshold=0.1, convergence_threshold=0.0001)
+        self.map = []
+        self.ros_listener_init()
+
+    def ros_callback(self, data):
+        print('Old Map:',self.map)
+        new_scan = self.pointcloud2_to_list(data)
+        if len(self.map) != 0:
+            self.icp.iterative_closest_point(reference=self.map, source=new_scan, initial=[1, 0, 0, 0, 0, 0, 0], number_of_iterations=10)
+            self.map.extend(new_scan)
+        else:
+            self.map = new_scan
+        print('new Map:', self.map)
+
+    def ros_listener_init(self):
+        rospy.init_node('listen', anonymous=True)
+        rospy.Subscriber('/cloud_out', PointCloud2, self.ros_callback)
+        rospy.spin()
+
+    def pointcloud2_to_list(self, cloud):
+        gen = PCL.read_points(cloud, skip_nans=True, field_names=('x', 'y', 'z'))
+        list_of_tuples = list(gen)
+        return [list(elem) for elem in list_of_tuples]
+
+
 
 class IterativeClosestPoint:
     def __init__(self, zero_threshold, convergence_threshold):
+        plt.ion()
         self.zero_threshold = zero_threshold
         self.convergence_threshold = convergence_threshold
         self.total_distances = []
         self.debug_print = True
+        plt.figure(2)
+        plt.ylabel('Total Distance')
+        plt.xlabel('Iteration')
+        plt.grid()
+        plt.figure(1)
 
     def iterative_closest_point(self, reference, source, initial, number_of_iterations):
         if self.debug_print is False:
@@ -48,11 +76,7 @@ class IterativeClosestPoint:
         print('Performing initial transformation')
         print('R =\n', rotation_matrix)
         print('T =\n', translation_vector)
-        plt.figure(2)
-        plt.ylabel('Total Distance')
-        plt.xlabel('Iteration')
-        plt.grid()
-        plt.figure(1)
+
         plot_points_2d(reference_n, source_n)
         plt.pause(.5)
         for i in range(len(source_n)):
@@ -126,17 +150,16 @@ class IterativeClosestPoint:
 
             self.plot_total_error()
             # Check convergence tolerance
-            if len(self.total_distances) >= 3:
-                l = len(self.total_distances)
-                percent_difference1 = math.fabs((self.total_distances[l - 1] - self.total_distances[l - 2])/self.total_distances[l - 1])
-                percent_difference2 = math.fabs((self.total_distances[l - 1] - self.total_distances[l - 3])/self.total_distances[l - 1])
-                percent_difference3 = math.fabs((self.total_distances[l - 2] - self.total_distances[l - 3])/self.total_distances[l - 2])
-                if percent_difference1 < self.convergence_threshold and percent_difference2 < self.convergence_threshold and percent_difference3 < self.convergence_threshold:
-                    print('ICP converged to a total distance', dist)
-                    break
             if dist < self.zero_threshold:
                 print('ICP total distance', dist, 'is below zero threshold')
                 break
+            elif len(self.total_distances) >= 3:
+                percent_difference1 = math.fabs((self.total_distances[-1] - self.total_distances[-2])/self.total_distances[-1])
+                percent_difference2 = math.fabs((self.total_distances[-1] - self.total_distances[-3])/self.total_distances[-1])
+                percent_difference3 = math.fabs((self.total_distances[-2] - self.total_distances[-3])/self.total_distances[-2])
+                if percent_difference1 < self.convergence_threshold and percent_difference2 < self.convergence_threshold and percent_difference3 < self.convergence_threshold:
+                    print('ICP converged to a total distance', dist)
+                    break
             plt.figure(1)
             plt.waitforbuttonpress()
 
@@ -212,6 +235,18 @@ class IterativeClosestPoint:
         if len(self.total_distances) > 1:
             plt.plot([l, l - 1], [self.total_distances[l - 1], self.total_distances[l - 2]], color='b')
         plt.plot(math.floor(l), self.total_distances[l - 1], 'bo-', marker='o', color='b')
+
+
+def test_icp():
+    print('Iteration Cloest Point')
+    inst = IterativeClosestPoint(zero_threshold=0.1, convergence_threshold=0.00000000001)
+    p = read_coordinate_file('l_shape_3d.txt')
+
+    x = read_coordinate_file('l_shape_3d.txt')
+    x = rotate_2d((0, 0), x, 75)
+    x = translate_2d(x, 5, 5)
+    del x[0]
+    inst.iterative_closest_point(p, x, [1, 0, 0, 0, 0, 0, 0], 100)
 
 
 def read_coordinate_file(filename):

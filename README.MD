@@ -5,7 +5,7 @@ TODO: Write a project description
 
 ##### Packages required:
 pip3:
-munkres matplotlib numpy pyyaml
+munkres matplotlib numpy pyyaml rospkg catkin_pkg
 apt-get:
 python3-tk
 
