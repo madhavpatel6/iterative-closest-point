@@ -22,33 +22,43 @@ warnings.filterwarnings("ignore")
 def main():
     #test_icp()
     m = MapBuilder()
+    m.build_map()
 
 
 class MapBuilder:
     def __init__(self):
         self.icp = IterativeClosestPoint(zero_threshold=0.1, convergence_threshold=0.0001)
         self.map = []
+        self.new_scan = None
         self.ros_listener_init()
 
+
     def ros_callback(self, data):
-        print('Old Map:',self.map)
-        new_scan = self.pointcloud2_to_list(data)
-        if len(self.map) != 0:
-            self.icp.iterative_closest_point(reference=self.map, source=new_scan, initial=[1, 0, 0, 0, 0, 0, 0], number_of_iterations=10)
-            self.map.extend(new_scan)
-        else:
-            self.map = new_scan
-        print('new Map:', self.map)
+        self.new_scan = self.pointcloud2_to_list(data)
+        print('New Scan Data:', self.new_scan)
 
     def ros_listener_init(self):
         rospy.init_node('listen', anonymous=True)
         rospy.Subscriber('/cloud_out', PointCloud2, self.ros_callback)
-        rospy.spin()
 
     def pointcloud2_to_list(self, cloud):
         gen = PCL.read_points(cloud, skip_nans=True, field_names=('x', 'y', 'z'))
         list_of_tuples = list(gen)
         return [list(elem) for elem in list_of_tuples]
+
+    def build_map(self):
+        while not rospy.is_shutdown():
+            if self.new_scan is not None:
+                if len(self.map) != 0:
+                    new_scan_transformed = self.icp.iterative_closest_point(reference=self.map, source=self.new_scan, initial=[1, 0, 0, 0, 0, 0, 0],
+                                                     number_of_iterations=10)
+                    self.map.extend(new_scan_transformed)
+                else:
+                    self.map = self.new_scan
+                    plot_points_2d(self.map, [])
+                    plt.pause(0.01)
+                self.new_scan = None
+                print('New Map', self.map)
 
 
 
@@ -69,6 +79,9 @@ class IterativeClosestPoint:
         if self.debug_print is False:
             sys.stdout = open(os.devnull, 'w')
         reference_n, source_n = reference, source
+        plt.figure(2)
+        plt.clf()
+        plt.figure(1)
         # Perform initial translation
         q = initial[0:4]
         rotation_matrix = self.compute_rotation_matrix(q)
@@ -78,7 +91,7 @@ class IterativeClosestPoint:
         print('T =\n', translation_vector)
 
         plot_points_2d(reference_n, source_n)
-        plt.pause(.5)
+        plt.pause(.01)
         for i in range(len(source_n)):
             source_n[i] = list((rotation_matrix * numpy.matrix(source_n[i]).getT() + translation_vector).flat)
 
@@ -154,6 +167,7 @@ class IterativeClosestPoint:
                 print('ICP total distance', dist, 'is below zero threshold')
                 break
             elif len(self.total_distances) >= 3:
+                print(self.total_distances)
                 percent_difference1 = math.fabs((self.total_distances[-1] - self.total_distances[-2])/self.total_distances[-1])
                 percent_difference2 = math.fabs((self.total_distances[-1] - self.total_distances[-3])/self.total_distances[-1])
                 percent_difference3 = math.fabs((self.total_distances[-2] - self.total_distances[-3])/self.total_distances[-2])
@@ -161,13 +175,16 @@ class IterativeClosestPoint:
                     print('ICP converged to a total distance', dist)
                     break
             plt.figure(1)
-            plt.waitforbuttonpress()
+            plt.pause(0.1)
+            #plt.waitforbuttonpress()
 
-        plt.figure(1)
-        plt.waitforbuttonpress()
+
+        #plt.waitforbuttonpress()
+        #plt.ioff()
         del self.total_distances[:]
         if self.debug_print is False:
             sys.stdout = sys.__stdout__
+        return source_n
 
     def compute_rotation_matrix(self, q):
         return numpy.matrix([
@@ -235,6 +252,7 @@ class IterativeClosestPoint:
         if len(self.total_distances) > 1:
             plt.plot([l, l - 1], [self.total_distances[l - 1], self.total_distances[l - 2]], color='b')
         plt.plot(math.floor(l), self.total_distances[l - 1], 'bo-', marker='o', color='b')
+        plt.pause(0.01)
 
 
 def test_icp():
