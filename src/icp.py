@@ -37,7 +37,7 @@ def get_subset_of_points(map, odom, radius):
 
 class MapBuilder:
     def __init__(self):
-        self.icp = IterativeClosestPoint(zero_threshold=0.1, convergence_threshold=0.0001)
+        self.icp = IterativeClosestPoint(zero_threshold=0.1, convergence_threshold=0.0001, nearest_neighbor_upperbound=0.25)
         self.map = []
         rospy.init_node('listen', anonymous=True)
         self.publisher = rospy.Publisher('/icp_map', PointCloud2, queue_size=10)
@@ -49,7 +49,7 @@ class MapBuilder:
         self.frame = None
 
     def laser_listen_once(self):
-        self.cloud_out_subscriber = rospy.Subscriber('/cloud_out', PointCloud2, self.cloud_out_callback)
+        self.cloud_out_subscriber = rospy.Subscriber('/cloud_out_global', PointCloud2, self.cloud_out_callback)
 
     def odom_listen_once(self):
         self.odom_subscriber = rospy.Subscriber('/odom', Odometry, self.odom_callback)
@@ -91,9 +91,9 @@ class MapBuilder:
         while not rospy.is_shutdown():
             if self.new_scan is not None and self.new_odom is not None:
                 if len(self.map) != 0:
-                    #m = self.map
-                    pos = self.new_odom.pose.pose.position
-                    m = get_subset_of_points(map=self.map, odom=[pos.x, pos.y, pos.z], radius=20)
+                    m = self.map
+                    #pos = self.new_odom.pose.pose.position
+                    #m = get_subset_of_points(map=self.map, odom=[pos.x, pos.y, pos.z], radius=20)
                     new_scan_transformed = self.icp.iterative_closest_point(reference=m, source=self.new_scan, initial=[1, 0, 0, 0, 0, 0, 0],
                                                      number_of_iterations=10)
                     self.map.extend(new_scan_transformed)
@@ -101,18 +101,21 @@ class MapBuilder:
                     self.map = self.new_scan
                 self.new_scan = None
                 self.new_odom = None
+                #self.publish_map()
                 self.laser_listen_once()
                 self.odom_listen_once()
             if oldtime + 5 < time.time():
+                rospy.loginfo('Publishing the map.')
                 self.publish_map()
                 oldtime = time.time()
 
 
 class IterativeClosestPoint:
-    def __init__(self, zero_threshold, convergence_threshold):
+    def __init__(self, zero_threshold, convergence_threshold, nearest_neighbor_upperbound):
         self.zero_threshold = zero_threshold
         self.convergence_threshold = convergence_threshold
         self.total_distances = []
+        self.nearest_neighbor_upperbound = nearest_neighbor_upperbound
 
     def iterative_closest_point(self, reference, source, initial, number_of_iterations):
         reference_n, source_n = reference, source
@@ -141,7 +144,11 @@ class IterativeClosestPoint:
 
             #print('Reference Center of Mass:\n', reference_mean)
             #print('Source Center of Mass   :\n', source_mean)
-            covariance_matrix = [[0 for i in range(len(reference_n[0]))] for j in range(len(reference_n[0]))]
+            try:
+                covariance_matrix = [[0 for i in range(len(reference_n[0]))] for j in range(len(reference_n[0]))]
+            except:
+                plot_points_2d(reference, source)
+                plt.plot()
 
             for itr in range(len(reference_n)):
                 source_std = numpy.matrix(source_n[itr]).getT() - source_mean
@@ -273,7 +280,7 @@ class IterativeClosestPoint:
         not_matched_b_index = set(range(len(b)))
         multi_matched_index = set()
         for i in range(len(b)):
-            new_cost, index = kdtree.query(b[i], k=1, distance_upper_bound=1)
+            new_cost, index = kdtree.query(b[i], k=1, distance_upper_bound=self.nearest_neighbor_upperbound)
             # query will give a cost of infinite and an index = len(a) if no matches found within distance upper bound
             if new_cost == math.inf and index == len(a):
                 continue

@@ -1,0 +1,4 @@
+<launch>
+    <node name="iterative_closest_point" pkg="icp.py" type="icp">
+    </node>
+</launch>
