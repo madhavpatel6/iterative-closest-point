@@ -41,12 +41,13 @@ class MapBuilder:
         self.map = []
         rospy.init_node('listen', anonymous=True)
         self.publisher = rospy.Publisher('/icp_map', PointCloud2, queue_size=10)
-
+        self.transform_publisher = rospy.Publisher('/icp_transform', Odometry, queue_size=10)
         self.new_odom = None
         self.new_scan = None
         self.cloud_out_subscriber = None
         self.odom_subscriber = None
         self.frame = None
+        self.icp_completed = True
 
     def laser_listen_once(self):
         self.cloud_out_subscriber = rospy.Subscriber('/cloud_out_global', PointCloud2, self.cloud_out_callback)
@@ -55,20 +56,17 @@ class MapBuilder:
         self.odom_subscriber = rospy.Subscriber('/odom', Odometry, self.odom_callback)
 
     def cloud_out_callback(self, data):
-        #rospy.loginfo('Received new sensor data.')
-        self.cloud_out_subscriber.unregister()
         self.frame = data.header.frame_id
+        self.seq = data.header.seq
         self.new_scan = self.pointcloud2_to_list(data)
 
     def odom_callback(self, data):
-        #rospy.loginfo('Received new odom information.')
-        self.odom_subscriber.unregister()
+        #self.odom_subscriber.unregister()
         self.new_odom = data
 
     def pointcloud2_to_list(self, cloud):
         gen = PCL.read_points(cloud, skip_nans=True, field_names=('x', 'y', 'z'))
         list_of_tuples = list(gen)
-        #list_of_lists = [list(elem) for elem in list_of_tuples]
         return list_of_tuples
 
     def list_to_pointcloud2(self, points):
@@ -79,7 +77,6 @@ class MapBuilder:
         return pcloud
 
     def publish_map(self):
-        #rospy.loginfo('Publishing ICP Map')
         self.publisher.publish(self.list_to_pointcloud2(self.map))
 
     def build_map(self):
@@ -89,25 +86,36 @@ class MapBuilder:
         itr = 0
         oldtime = time.time()
         while not rospy.is_shutdown():
-            if self.new_scan is not None and self.new_odom is not None:
+            if self.new_scan is not None:
                 if len(self.map) != 0:
                     m = self.map
                     #pos = self.new_odom.pose.pose.position
                     #m = get_subset_of_points(map=self.map, odom=[pos.x, pos.y, pos.z], radius=20)
-                    new_scan_transformed = self.icp.iterative_closest_point(reference=m, source=self.new_scan, initial=[1, 0, 0, 0, 0, 0, 0],
+                    new_scan_transformed, total_t, total_q = self.icp.iterative_closest_point(reference=m, source=self.new_scan, initial=[1, 0, 0, 0, 0, 0, 0],
                                                      number_of_iterations=10)
                     self.map.extend(new_scan_transformed)
+                    transform = Odometry()
+                    transform.header.frame_id = 'odom'
+                    transform.pose.pose.position.x = total_t[0]
+                    transform.pose.pose.position.y = total_t[1]
+                    transform.pose.pose.position.z = total_t[2]
+                    transform.pose.pose.orientation.x = total_q[1]
+                    transform.pose.pose.orientation.y = total_q[2]
+                    transform.pose.pose.orientation.z = total_q[3]
+                    transform.pose.pose.orientation.w = total_q[0]
+                    self.transform_publisher.publish(transform)
                 else:
                     self.map = self.new_scan
+
                 self.new_scan = None
                 self.new_odom = None
-                #self.publish_map()
-                self.laser_listen_once()
-                self.odom_listen_once()
-            if oldtime + 5 < time.time():
-                rospy.loginfo('Publishing the map.')
                 self.publish_map()
-                oldtime = time.time()
+                #self.laser_listen_once()
+                #self.odom_listen_once()
+            #if oldtime + 5 < time.time():
+            #    rospy.loginfo('Publishing the map.')
+            #    self.publish_map()
+            #    oldtime = time.time()
 
 
 class IterativeClosestPoint:
@@ -124,26 +132,21 @@ class IterativeClosestPoint:
         q = initial[0:4]
         rotation_matrix = self.compute_rotation_matrix(q)
         translation_vector = numpy.matrix(initial[4:7]).getT()
-        #print('Performing initial transformation')
-        #print('R =\n', rotation_matrix)
-        #print('T =\n', translation_vector)
+        total_t, total_q = translation_vector, q
 
         for i in range(len(source_n)):
             source_n[i] = list((rotation_matrix * numpy.matrix(source_n[i]).getT() + translation_vector).flat)
 
+        #rospy.loginfo('Starting ICP')
         for itr in range(number_of_iterations):
-            #print('--------------------------------- Iteration # %d ---------------------------------' % (itr + 1))
-#            reference_n, source_n, dist,  not_matched_reference, not_matched_source, multi_matched_index = self.nearest_neighbor_munkres(reference_n, source_n)
-            reference_n, source_n, dist, not_matched_reference, not_matched_source, multi_matched_index = self.nearest_neighbor_kdtree(reference_n, source_n)
+            #            reference_n, source_n, dist,  not_matched_reference, not_matched_source, multi_matched_index = self.nearest_neighbor_munkres(reference_n, source_n)
+            reference_n, source_n, dist, not_matched_reference, not_matched_source, multi_matched_index = self.nearest_neighbor_kdtree(
+                reference_n, source_n)
             self.total_distances.append(dist)
-            #print(reference_n)
-            #print(source_n)
 
             reference_mean = numpy.matrix(numpy.mean(reference_n, axis=0)).getT()
             source_mean = numpy.matrix(numpy.mean(source_n, axis=0)).getT()
 
-            #print('Reference Center of Mass:\n', reference_mean)
-            #print('Source Center of Mass   :\n', source_mean)
             try:
                 covariance_matrix = [[0 for i in range(len(reference_n[0]))] for j in range(len(reference_n[0]))]
             except:
@@ -156,16 +159,13 @@ class IterativeClosestPoint:
                 covariance_matrix += (source_std * reference_std)
 
             covariance_matrix *= (1 / len(reference_n))
-            #print('Covariance Matrix:\n', covariance_matrix)
-
             anti_symmetric_matrix = covariance_matrix - covariance_matrix.getT()
-            #print('Anti-symmetric matrix:\n', anti_symmetric_matrix)
 
-            column_vector = numpy.matrix([anti_symmetric_matrix[1, 2], anti_symmetric_matrix[2, 0], anti_symmetric_matrix[0, 1]]).getT()
-            #print('Column vector:\n', column_vector)
+            column_vector = numpy.matrix(
+                [anti_symmetric_matrix[1, 2], anti_symmetric_matrix[2, 0], anti_symmetric_matrix[0, 1]]).getT()
 
-            covariance_entry = covariance_matrix + covariance_matrix.getT() - numpy.trace(covariance_matrix) * numpy.identity(3)
-            #print('covariance entry\n', covariance_entry)
+            covariance_entry = covariance_matrix + covariance_matrix.getT() - numpy.trace(
+                covariance_matrix) * numpy.identity(3)
 
             symmetric_matrix = numpy.matrix([
                 [numpy.trace(covariance_matrix), column_vector[0, 0], column_vector[1, 0], column_vector[2, 0]],
@@ -173,23 +173,21 @@ class IterativeClosestPoint:
                 [column_vector[1, 0], covariance_entry[1, 0], covariance_entry[1, 1], covariance_entry[1, 2]],
                 [column_vector[2, 0], covariance_entry[2, 0], covariance_entry[2, 1], covariance_entry[2, 2]]
             ])
-            #print('symmetric matrix\n', symmetric_matrix)
 
             e, v = numpy.linalg.eig(symmetric_matrix)
-            #print('eigen values\n', e)
-            #print('eigen vectors\n', v)
 
             max_eigenvalue_index = numpy.argmax(e)
-            #print('max eigen value index', max_eigenvalue_index)
 
             q = list(numpy.matrix(v[:, max_eigenvalue_index]).flat)
-            #print('max eigen vector\n', q)
 
             rotation_matrix = self.compute_rotation_matrix(q)
-            #print('rotation matrix\n', rotation_matrix)
 
             translation_vector = reference_mean - rotation_matrix * source_mean
-            #print('translation vector\n', translation_vector)
+
+            total_t = numpy.add(total_t, translation_vector)
+            total_q = self.multiply_quaternion(q, total_q)
+
+
             # Add in the not matched points
             for i in sorted(multi_matched_index, reverse=True):
                 del reference_n[i]
@@ -198,21 +196,22 @@ class IterativeClosestPoint:
             for p in not_matched_source:
                 source_n.append(p)
             for i in range(len(source_n)):
-                source_n[i] = list((rotation_matrix*numpy.matrix(source_n[i]).getT() + translation_vector).flat)
+                source_n[i] = list((rotation_matrix * numpy.matrix(source_n[i]).getT() + translation_vector).flat)
+
             # Check convergence tolerance
             if dist < self.zero_threshold:
-                #print('ICP total distance', dist, 'is below zero threshold')
                 break
             elif len(self.total_distances) >= 3:
-                #print(self.total_distances)
-                percent_difference1 = math.fabs((self.total_distances[-1] - self.total_distances[-2])/self.total_distances[-1])
-                percent_difference2 = math.fabs((self.total_distances[-1] - self.total_distances[-3])/self.total_distances[-1])
-                percent_difference3 = math.fabs((self.total_distances[-2] - self.total_distances[-3])/self.total_distances[-2])
+                percent_difference1 = math.fabs(
+                    (self.total_distances[-1] - self.total_distances[-2]) / self.total_distances[-1])
+                percent_difference2 = math.fabs(
+                    (self.total_distances[-1] - self.total_distances[-3]) / self.total_distances[-1])
+                percent_difference3 = math.fabs(
+                    (self.total_distances[-2] - self.total_distances[-3]) / self.total_distances[-2])
                 if percent_difference1 < self.convergence_threshold and percent_difference2 < self.convergence_threshold and percent_difference3 < self.convergence_threshold:
-                    #print('ICP converged to a total distance', dist)
                     break
         del self.total_distances[:]
-        return source_n
+        return source_n, total_t, total_q
 
     def compute_rotation_matrix(self, q):
         return numpy.matrix([
@@ -223,6 +222,19 @@ class IterativeClosestPoint:
             [2 * (q[1] * q[3] - q[0] * q[2]), 2 * (q[2] * q[3] + q[0] * q[1]),
              q[0] ** 2 + q[3] ** 2 - q[1] ** 2 - q[2] ** 2]
         ])
+
+    '''
+    performs multiplication q*r
+    Where r is the first rotation applied
+    and q is the second rotation applied
+    '''
+    def multiply_quaternion(self, q, r):
+        result = [0, 0, 0, 0]
+        result[0] = r[0] * q[0] - r[1] * q[1] - r[2] * q[2] - r[3] * q[3]
+        result[1] = r[0] * q[1] + r[1] * q[0] - r[2] * q[3] + r[3] * q[2]
+        result[2] = r[0] * q[2] + r[1] * q[3] + r[2] * q[0] - r[3] * q[1]
+        result[3] = r[0] * q[3] - r[1] * q[2] + r[2] * q[1] + r[3] * q[0]
+        return result
 
     def nearest_neighbor_munkres(self, a, b):
         #print('Length: ', len(a), len(b))
