@@ -1,8 +1,8 @@
-#!/usr/bin/python3
+#!/usr/bin/python
 import sys
 import numpy
 import math
-from munkres import Munkres
+#from munkres import Munkres
 import random
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
@@ -18,9 +18,10 @@ from roslib import message
 import sensor_msgs.point_cloud2 as PCL
 from sensor_msgs.msg import PointCloud2, PointField
 from nav_msgs.msg import Odometry
+from geometry_msgs.msg import Quaternion
 from roslib import message
 warnings.filterwarnings("ignore")
-
+import tf
 
 def main():
     #test_icp()
@@ -37,8 +38,10 @@ def get_subset_of_points(map, odom, radius):
 
 class MapBuilder:
     def __init__(self):
-        self.icp = IterativeClosestPoint(zero_threshold=0.1, convergence_threshold=0.0001, nearest_neighbor_upperbound=0.25)
+        self.icp = IterativeClosestPoint(zero_threshold=0.1, convergence_threshold=0.0001, nearest_neighbor_upperbound=0.5)
         self.map = []
+        self.translation_threshold = 0.2
+        self.rotation_threshold = 2.5
         rospy.init_node('listen', anonymous=True)
         self.publisher = rospy.Publisher('/icp_map', PointCloud2, queue_size=10)
         self.transform_publisher = rospy.Publisher('/icp_transform', Odometry, queue_size=10)
@@ -48,6 +51,7 @@ class MapBuilder:
         self.odom_subscriber = None
         self.frame = None
         self.icp_completed = True
+        self.old_odom = None
 
     def laser_listen_once(self):
         self.cloud_out_subscriber = rospy.Subscriber('/cloud_out_global', PointCloud2, self.cloud_out_callback)
@@ -73,11 +77,41 @@ class MapBuilder:
         pcloud = PointCloud2()
         pcloud = PCL.create_cloud_xyz32(pcloud.header, points)
         pcloud.header.stamp = rospy.Time.now()
-        pcloud.header.frame_id = self.frame
+        pcloud.header.frame_id = '/odomc'
         return pcloud
 
     def publish_map(self):
         self.publisher.publish(self.list_to_pointcloud2(self.map))
+
+    def check_movement(self):
+        if self.new_odom is None:
+            return False
+        if self.old_odom is None:
+            return True
+        else:
+            dx = self.new_odom.pose.pose.position.x - self.old_odom.pose.pose.position.x
+            dy = self.new_odom.pose.pose.position.y - self.old_odom.pose.pose.position.y
+
+            if (dx**2 + dy**2) >= self.translation_threshold**2:
+                return True
+            q = [self.new_odom.pose.pose.orientation.x, self.new_odom.pose.pose.orientation.y,
+                 self.new_odom.pose.pose.orientation.z, self.new_odom.pose.pose.orientation.w]
+            new_yaw = tf.transformations.euler_from_quaternion(q)[2]
+            if new_yaw < 0:
+                new_yaw += 2*math.pi
+            q = [self.old_odom.pose.pose.orientation.x, self.old_odom.pose.pose.orientation.y,
+                 self.old_odom.pose.pose.orientation.z, self.old_odom.pose.pose.orientation.w]
+            old_yaw = tf.transformations.euler_from_quaternion(q)[2]
+            if old_yaw < 0:
+                old_yaw += 2*math.pi
+
+            #print('yaw', new_yaw*180/3.14)
+            dyaw = abs(new_yaw - old_yaw)*180/math.pi
+            if dyaw > 180:
+                dyaw = 360 - dyaw
+            if abs(dyaw) >= self.rotation_threshold:
+                return True
+        return False
 
     def build_map(self):
         rospy.loginfo('Starting Map Building.')
@@ -86,24 +120,37 @@ class MapBuilder:
         itr = 0
         oldtime = time.time()
         while not rospy.is_shutdown():
-            if self.new_scan is not None:
+            if self.new_scan is not None and self.check_movement():
+                print('Updated old odom')
+                self.old_odom = self.new_odom
                 if len(self.map) != 0:
                     m = self.map
                     #pos = self.new_odom.pose.pose.position
                     #m = get_subset_of_points(map=self.map, odom=[pos.x, pos.y, pos.z], radius=20)
-                    new_scan_transformed, total_t, total_q = self.icp.iterative_closest_point(reference=m, source=self.new_scan, initial=[1, 0, 0, 0, 0, 0, 0],
+                    new_scan_transformed, total_t, total_q, array_t, array_q= self.icp.iterative_closest_point(reference=m, source=self.new_scan, initial=[1, 0, 0, 0, 0, 0, 0],
                                                      number_of_iterations=10)
                     self.map.extend(new_scan_transformed)
-                    transform = Odometry()
-                    transform.header.frame_id = 'odom'
+                    '''transform = Odometry()
+                    transform.header.frame_id = '/odomc'
                     transform.pose.pose.position.x = total_t[0]
                     transform.pose.pose.position.y = total_t[1]
                     transform.pose.pose.position.z = total_t[2]
                     transform.pose.pose.orientation.x = total_q[1]
                     transform.pose.pose.orientation.y = total_q[2]
                     transform.pose.pose.orientation.z = total_q[3]
-                    transform.pose.pose.orientation.w = total_q[0]
-                    self.transform_publisher.publish(transform)
+                    transform.pose.pose.orientation.w = total_q[0]'''
+                    rospy.loginfo('Total Q: ' + str(numpy.around(total_q, 3)))
+                    for i in range(len(total_q)):
+                        transform = Odometry()
+                        transform.header.frame_id = '/odomc'
+                        transform.pose.pose.position.x = array_t[i][0]
+                        transform.pose.pose.position.y = array_t[i][1]
+                        transform.pose.pose.position.z = array_t[i][2]
+                        transform.pose.pose.orientation.x = array_q[i][1]
+                        transform.pose.pose.orientation.y = array_q[i][2]
+                        transform.pose.pose.orientation.z = array_q[i][3]
+                        transform.pose.pose.orientation.w = array_q[i][0]
+                        self.transform_publisher.publish(transform)
                 else:
                     self.map = self.new_scan
 
@@ -133,7 +180,7 @@ class IterativeClosestPoint:
         rotation_matrix = self.compute_rotation_matrix(q)
         translation_vector = numpy.matrix(initial[4:7]).getT()
         total_t, total_q = translation_vector, q
-
+        array_t, array_q = [list(translation_vector.flat)], [q]
         for i in range(len(source_n)):
             source_n[i] = list((rotation_matrix * numpy.matrix(source_n[i]).getT() + translation_vector).flat)
 
@@ -181,12 +228,13 @@ class IterativeClosestPoint:
             q = list(numpy.matrix(v[:, max_eigenvalue_index]).flat)
 
             rotation_matrix = self.compute_rotation_matrix(q)
-
+            rospy.loginfo('Q: ' + str(numpy.around(q, decimals=3)))
             translation_vector = reference_mean - rotation_matrix * source_mean
 
             total_t = numpy.add(total_t, translation_vector)
             total_q = self.multiply_quaternion(q, total_q)
-
+            array_t.append(list(translation_vector.flat))
+            array_q.append(q)
 
             # Add in the not matched points
             for i in sorted(multi_matched_index, reverse=True):
@@ -211,7 +259,7 @@ class IterativeClosestPoint:
                 if percent_difference1 < self.convergence_threshold and percent_difference2 < self.convergence_threshold and percent_difference3 < self.convergence_threshold:
                     break
         del self.total_distances[:]
-        return source_n, total_t, total_q
+        return source_n, total_t, total_q, array_t, array_q
 
     def compute_rotation_matrix(self, q):
         return numpy.matrix([
@@ -294,7 +342,7 @@ class IterativeClosestPoint:
         for i in range(len(b)):
             new_cost, index = kdtree.query(b[i], k=1, distance_upper_bound=self.nearest_neighbor_upperbound)
             # query will give a cost of infinite and an index = len(a) if no matches found within distance upper bound
-            if new_cost == math.inf and index == len(a):
+            if new_cost == float('inf') and index == len(a):
                 continue
             cost += new_cost
             new_a.append(a[index])
