@@ -54,19 +54,31 @@ class MapBuilder:
         self.old_odom = None
 
     def laser_listen_once(self):
-        self.cloud_out_subscriber = rospy.Subscriber('/cloud_out_global', PointCloud2, self.cloud_out_callback)
+        self.cloud_out_subscriber = rospy.Subscriber('/cloud_out_odom', PointCloud2, self.cloud_out_callback)
 
     def odom_listen_once(self):
-        self.odom_subscriber = rospy.Subscriber('/odom', Odometry, self.odom_callback)
+        self.odom_subscriber = rospy.Subscriber('/odomc', Odometry, self.odom_callback)
 
     def cloud_out_callback(self, data):
+        plotscan = False
+        if plotscan:
+            plt.ion()
+            plt.clf()
         self.frame = data.header.frame_id
         self.seq = data.header.seq
         self.new_scan = self.pointcloud2_to_list(data)
+        if plotscan:
+            for p in self.new_scan:
+                plt.scatter(p[0], p[1], s=5)
+            if self.new_odom is not None:
+                plt.scatter(self.new_odom.pose.pose.position.x, self.new_odom.pose.pose.position.y, s=10, color='blue')
+            plt.axis('equal')
+            plt.waitforbuttonpress()
 
     def odom_callback(self, data):
         #self.odom_subscriber.unregister()
         self.new_odom = data
+
 
     def pointcloud2_to_list(self, cloud):
         gen = PCL.read_points(cloud, skip_nans=True, field_names=('x', 'y', 'z'))
@@ -137,7 +149,7 @@ class MapBuilder:
                     transform.pose.pose.orientation.y = total_q[2]
                     transform.pose.pose.orientation.z = total_q[3]
                     transform.pose.pose.orientation.w = total_q[0]'''
-                    rospy.loginfo('Total Q: ' + str(numpy.around(total_q, 3)))
+                    rospy.loginfo('Total Q: ' + str(numpy.around(total_t, 3)))
                     for i in range(len(total_q)):
                         transform = Odometry()
                         transform.header.frame_id = '/odomc'
