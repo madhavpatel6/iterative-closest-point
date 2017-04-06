@@ -20,7 +20,7 @@ class OdometryCorrector:
         self.odomc = None
         self.icp_subscriber = None
         self.odom_subscriber = None
-        self.odomc_to_odom = Point(x=0, y=0, z=0)
+        self.odomc_translation = Point(x=0, y=0, z=0)
         self.odomc_quaternion = [1, 0, 0, 0]
 
     def callback_odom(self, data):
@@ -63,9 +63,9 @@ class OdometryCorrector:
                     self.odomc.pose.pose.position.y += self.icp_data.pose.pose.position.y
                     self.odomc.pose.pose.position.z += self.icp_data.pose.pose.position.z
                     # Update the stored total translation
-                    self.odomc_to_odom[0] += self.icp_data.pose.pose.position.x
-                    self.odomc_to_odom[1] += self.icp_data.pose.pose.position.y
-                    self.odomc_to_odom[2] += self.icp_data.pose.pose.position.z
+                    self.odomc_translation[0] += self.icp_data.pose.pose.position.x
+                    self.odomc_translation[1] += self.icp_data.pose.pose.position.y
+                    self.odomc_translation[2] += self.icp_data.pose.pose.position.z
                     r = [self.odomc.pose.pose.orientation.w, self.odomc.pose.pose.orientation.x,
                          self.odomc.pose.pose.orientation.y, self.odomc.pose.pose.orientation.z]
                     q = [self.icp_data.pose.pose.orientation.w, self.icp_data.pose.pose.orientation.x,
@@ -108,15 +108,14 @@ class OdometryCorrector:
         t.header.frame_id = '/odomc'
         t.header.stamp = rospy.Time.now()
         t.child_frame_id = '/odom'
-        transform = tf.transformations.concatenate_matrices(tf.transformations.translation_matrix(self.odomc_to_odom), tf.transformations.quaternion_matrix(self.odomc_quaternion))
-        inversed_transform = tf.transformations.inverse_matrix(transform)
-        translation = tf.transformations.translation_from_matrix(inversed_transform)
-        quaternion = tf.transformations.quaternion_from_matrix(inversed_transform)
-        print('Org', self.odomc_to_odom)
-        print('Inv', translation)
-        print('Qrg', self.odomc_quaternion)
-        print('Qnv', quaternion)
-
+        translation = [-1*self.odomc_translation[0], -1*self.odomc_translation[1], -1*self.odomc_translation[2]]
+        mag = self.odomc_quaternion[0]**2 + self.odomc_quaternion[1]**2 + self.odomc_quaternion[2]**2 + self.odomc_quaternion[3]**2
+        quaternion = [
+            self.odomc_quaternion[0]/mag,
+            -1 * self.odomc_quaternion[1] / mag,
+            -1 * self.odomc_quaternion[2] / mag,
+            -1 * self.odomc_quaternion[3] / mag
+        ]
         t.transform.translation.x = translation[0]
         t.transform.translation.y = translation[1]
         t.transform.translation.z = translation[2]
