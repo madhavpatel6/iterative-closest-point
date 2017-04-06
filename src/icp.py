@@ -117,8 +117,6 @@ class MapBuilder:
         rospy.loginfo('Starting Map Building.')
         self.laser_listen_once()
         self.odom_listen_once()
-        itr = 0
-        oldtime = time.time()
         while not rospy.is_shutdown():
             if self.new_scan is not None and self.check_movement():
                 print('Updated old odom')
@@ -152,6 +150,8 @@ class MapBuilder:
                         transform.pose.pose.orientation.w = array_q[i][0]
                         self.transform_publisher.publish(transform)
                 else:
+                    for i in range(len(self.new_scan)):
+                        self.new_scan[i] = (self.new_scan[i][0], self.new_scan[i][1], 0)
                     self.map = self.new_scan
 
                 self.new_scan = None
@@ -183,7 +183,7 @@ class IterativeClosestPoint:
         array_t, array_q = [list(translation_vector.flat)], [q]
         for i in range(len(source_n)):
             source_n[i] = list((rotation_matrix * numpy.matrix(source_n[i]).getT() + translation_vector).flat)
-
+            source_n[i][2] = 0
         #rospy.loginfo('Starting ICP')
         for itr in range(number_of_iterations):
             #            reference_n, source_n, dist,  not_matched_reference, not_matched_source, multi_matched_index = self.nearest_neighbor_munkres(reference_n, source_n)
@@ -228,10 +228,12 @@ class IterativeClosestPoint:
             q = list(numpy.matrix(v[:, max_eigenvalue_index]).flat)
 
             rotation_matrix = self.compute_rotation_matrix(q)
-            rospy.loginfo('Q: ' + str(numpy.around(q, decimals=3)))
+            rospy.loginfo('Q: ' + str(numpy.around(q, decimals=6)))
             translation_vector = reference_mean - rotation_matrix * source_mean
 
+
             total_t = numpy.add(total_t, translation_vector)
+            rospy.loginfo('T: ' + str(numpy.around(total_t, decimals=3)))
             total_q = self.multiply_quaternion(q, total_q)
             array_t.append(list(translation_vector.flat))
             array_q.append(q)
