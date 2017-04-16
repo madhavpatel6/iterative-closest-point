@@ -1,5 +1,5 @@
 <launch>
-    <node name="map_builder" pkg="iterative_closest_point" type="icp.py">
-    	<remap from="/cloud_out_global" to="/cloud_out"/>
+    <node name="map_builder" pkg="iterative_closest_point" type="icp.py" output="screen">
+    	<remap from="/cloud_out_global" to="/cloud_out_global"/>
     </node>
 </launch>
