@@ -1,8 +1,9 @@
 #!/usr/bin/python
+from __future__ import division
 import sys
 import numpy
 import math
-#from munkres import Munkres
+from munkres import Munkres
 import random
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
@@ -54,7 +55,7 @@ class MapBuilder:
         self.old_odom = None
 
     def laser_listen_once(self):
-        self.cloud_out_subscriber = rospy.Subscriber('/cloud_out_odom', PointCloud2, self.cloud_out_callback)
+        self.cloud_out_subscriber = rospy.Subscriber('/cloud_out_global', PointCloud2, self.cloud_out_callback)
 
     def odom_listen_once(self):
         self.odom_subscriber = rospy.Subscriber('/odomc', Odometry, self.odom_callback)
@@ -149,7 +150,7 @@ class MapBuilder:
                     transform.pose.pose.orientation.y = total_q[2]
                     transform.pose.pose.orientation.z = total_q[3]
                     transform.pose.pose.orientation.w = total_q[0]'''
-                    rospy.loginfo('Total Q: ' + str(numpy.around(total_t, 3)))
+                    rospy.loginfo('Total Q: ' + str(numpy.around(total_q, 3)))
                     for i in range(len(total_q)):
                         transform = Odometry()
                         transform.header.frame_id = '/odomc'
@@ -198,9 +199,8 @@ class IterativeClosestPoint:
             source_n[i][2] = 0
         #rospy.loginfo('Starting ICP')
         for itr in range(number_of_iterations):
-            #            reference_n, source_n, dist,  not_matched_reference, not_matched_source, multi_matched_index = self.nearest_neighbor_munkres(reference_n, source_n)
-            reference_n, source_n, dist, not_matched_reference, not_matched_source, multi_matched_index = self.nearest_neighbor_kdtree(
-                reference_n, source_n)
+            #reference_n, source_n, dist,  not_matched_reference, not_matched_source, multi_matched_index = self.nearest_neighbor_munkres(reference_n, source_n)
+            reference_n, source_n, dist, not_matched_reference, not_matched_source, multi_matched_index = self.nearest_neighbor_kdtree(reference_n, source_n)
             self.total_distances.append(dist)
 
             reference_mean = numpy.matrix(numpy.mean(reference_n, axis=0)).getT()
@@ -240,12 +240,12 @@ class IterativeClosestPoint:
             q = list(numpy.matrix(v[:, max_eigenvalue_index]).flat)
 
             rotation_matrix = self.compute_rotation_matrix(q)
-            rospy.loginfo('Q: ' + str(numpy.around(q, decimals=6)))
+            #print('q = ', q)
             translation_vector = reference_mean - rotation_matrix * source_mean
 
 
             total_t = numpy.add(total_t, translation_vector)
-            rospy.loginfo('T: ' + str(numpy.around(total_t, decimals=3)))
+            #rospy.loginfo('T: ' + str(numpy.around(total_t, decimals=3)))
             total_q = self.multiply_quaternion(q, total_q)
             array_t.append(list(translation_vector.flat))
             array_q.append(q)
@@ -323,12 +323,14 @@ class IterativeClosestPoint:
         for row, column in indexes:
             value = matrix[row][column]
             total += value
-            #print('(%d, %d)   -> %0.3f' % (row, column, value))
+            print('(%d, %d)   -> %0.3f' % (row, column, value))
             new_a.append(a[row])
             new_b.append(b[column])
 
             not_matched_a_index.remove(row)
             not_matched_b_index.remove(column)
+            #plt.annotate(s='', xy=new_a[-1][0:2], xytext=new_b[-1][0:2], arrowprops=dict(arrowstyle='<->'))
+            plt.waitforbuttonpress()
             #print('total cost: %0.3f' % total)
 
         not_matched_a = []
@@ -393,13 +395,17 @@ class IterativeClosestPoint:
 
 def test_icp():
     #print('Iteration Cloest Point')
-    inst = IterativeClosestPoint(zero_threshold=0.1, convergence_threshold=0.00000000001)
+    inst = IterativeClosestPoint(zero_threshold=0.1, convergence_threshold=0.00000000001, nearest_neighbor_upperbound=float('inf'))
     p = read_coordinate_file('l_shape_3d.txt')
 
     x = read_coordinate_file('l_shape_3d.txt')
-    x = rotate_2d((0, 0), x, 20)
-    x = translate_2d(x, -1, -1)
-    inst.iterative_closest_point(p, x, [1, 0, 0, 0, 0, 0, 0], 100)
+    x = rotate_2d((0, 0), x, 10)
+    x = translate_2d(x, 0, 0)
+    plot_points_2d(p, x)
+    new_scan, total_t, total_q, array_t, array_q = inst.iterative_closest_point(p, x, [1, 0, 0, 0, 0, 0, 0], 100)
+    plt.figure(2)
+    plot_points_2d(p, new_scan)
+    input()
 
 
 

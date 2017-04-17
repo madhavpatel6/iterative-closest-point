@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+from __future__ import division
 import sys
 import rospy
 from nav_msgs.msg import Odometry
@@ -22,10 +23,12 @@ class OdometryCorrector:
         self.odom_subscriber = None
         self.odomc_translation = Point(x=0, y=0, z=0)
         self.odomc_quaternion = [1, 0, 0, 0]
+        self.stamp = None
 
     def callback_odom(self, data):
         #rospy.loginfo('Received Odom')
         self.odom_data = data
+        self.stamp = data.header.stamp
 
     def callback_icp(self, data):
         self.icp_data = data
@@ -46,23 +49,27 @@ class OdometryCorrector:
                     dx = self.odom_data.pose.pose.position.x - self.odom_data_prev.pose.pose.position.x
                     dy = self.odom_data.pose.pose.position.y - self.odom_data_prev.pose.pose.position.y
                     dz = self.odom_data.pose.pose.position.z - self.odom_data_prev.pose.pose.position.z
-                    dox = self.odom_data.pose.pose.orientation.x - self.odom_data_prev.pose.pose.orientation.x
-                    doy = self.odom_data.pose.pose.orientation.y - self.odom_data_prev.pose.pose.orientation.y
-                    doz = self.odom_data.pose.pose.orientation.z - self.odom_data_prev.pose.pose.orientation.z
-                    dow = self.odom_data.pose.pose.orientation.w - self.odom_data_prev.pose.pose.orientation.w
+                    q1 = [self.odom_data_prev.pose.pose.orientation.w, self.odom_data_prev.pose.pose.orientation.x,
+                          self.odom_data_prev.pose.pose.orientation.y, self.odom_data_prev.pose.pose.orientation.z]
+                    q2 = [self.odom_data.pose.pose.orientation.w, self.odom_data.pose.pose.orientation.x,
+                          self.odom_data.pose.pose.orientation.y, self.odom_data.pose.pose.orientation.z]
+
+                    diff = self.multiply_quaternion(q2, self.inverse_quaternion(q1))
+                    old = [self.odomc.pose.pose.orientation.w, self.odomc.pose.pose.orientation.x, self.odomc.pose.pose.orientation.y, self.odomc.pose.pose.orientation.z]
+                    newodomc = self.multiply_quaternion(diff, old)
                     self.odomc.pose.pose.position.x += dx
                     self.odomc.pose.pose.position.y += dy
                     self.odomc.pose.pose.position.z += dz
-                    self.odomc.pose.pose.orientation.x += dox
-                    self.odomc.pose.pose.orientation.y += doy
-                    self.odomc.pose.pose.orientation.z += doz
-                    self.odomc.pose.pose.orientation.w += dow
+                    self.odomc.pose.pose.orientation.x = newodomc[1]
+                    self.odomc.pose.pose.orientation.y = newodomc[2]
+                    self.odomc.pose.pose.orientation.z = newodomc[3]
+                    self.odomc.pose.pose.orientation.w = newodomc[0]
 
 
                     self.odom_data_prev = self.odom_data
                     self.odom_data = None
 
-                    self.odomc.header.stamp = rospy.Time.now()
+                    self.odomc.header.stamp = self.stamp #rospy.Time.now()
                     self.publisher.publish(self.odomc)
 
                 if self.icp_data is not None:
@@ -89,7 +96,7 @@ class OdometryCorrector:
                     self.odomc_quaternion = self.multiply_quaternion(q, self.odomc_quaternion)
                     self.icp_data = None
 
-                    self.odomc.header.stamp = rospy.Time.now()
+                    self.odomc.header.stamp = self.stamp #rospy.Time.now()
                     self.publisher.publish(self.odomc)
                 self.publish_tf()
 
@@ -97,8 +104,8 @@ class OdometryCorrector:
                 rospy.loginfo('Setting initial data')
                 self.odomc = self.odom_data
                 self.odomc.header.frame_id = '/odomc'
-                self.odomc.child_frame_id = ''
-                self.odomc.header.stamp = rospy.Time.now()
+                self.odomc.child_frame_id = '/odom'
+                self.odomc.header.stamp = self.stamp #rospy.Time.now()
                 self.publisher.publish(self.odomc)
                 self.odom_data_prev = self.odom_data
                 self.odom_data = None
@@ -111,10 +118,20 @@ class OdometryCorrector:
         result[3] = r[0] * q[3] - r[1] * q[2] + r[2] * q[1] + r[3] * q[0]
         return result
 
+    def inverse_quaternion(self, q):
+        mag = q[0] ** 2 + q[1] ** 2 + q[2] ** 2 + q[3] ** 2
+        inverse = [
+            q[0] / mag,
+            -1 * q[1] / mag,
+            -1 * q[2] / mag,
+            -1 * q[3] / mag
+        ]
+        return inverse
+
     def publish_tf(self):
         t = geometry_msgs.msg.TransformStamped()
         t.header.frame_id = '/odomc'
-        t.header.stamp = rospy.Time.now()
+        t.header.stamp = self.stamp #rospy.Time.now()
         t.child_frame_id = '/odom'
         translation = [self.odomc_translation[0], self.odomc_translation[1], self.odomc_translation[2]]
         quaternion = [
@@ -123,7 +140,6 @@ class OdometryCorrector:
             self.odomc_quaternion[2],
             self.odomc_quaternion[3]
         ]
-
         '''
         translation = [-1*self.odomc_translation[0], -1*self.odomc_translation[1], -1*self.odomc_translation[2]]
         mag = self.odomc_quaternion[0]**2 + self.odomc_quaternion[1]**2 + self.odomc_quaternion[2]**2 + self.odomc_quaternion[3]**2
@@ -132,8 +148,8 @@ class OdometryCorrector:
             -1 * self.odomc_quaternion[1] / mag,
             -1 * self.odomc_quaternion[2] / mag,
             -1 * self.odomc_quaternion[3] / mag
-        ]
-        '''
+        ]'''
+
         t.transform.translation.x = translation[0]
         t.transform.translation.y = translation[1]
         t.transform.translation.z = translation[2]
