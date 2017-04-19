@@ -56,14 +56,14 @@ class OdometryCorrector:
 
                     diff = self.multiply_quaternion(q2, self.inverse_quaternion(q1))
                     old = [self.odomc.pose.pose.orientation.w, self.odomc.pose.pose.orientation.x, self.odomc.pose.pose.orientation.y, self.odomc.pose.pose.orientation.z]
-                    newodomc = self.multiply_quaternion(diff, old)
+                    new_orientation = self.multiply_quaternion(diff, old)
                     self.odomc.pose.pose.position.x += dx
                     self.odomc.pose.pose.position.y += dy
                     self.odomc.pose.pose.position.z += dz
-                    self.odomc.pose.pose.orientation.x = newodomc[1]
-                    self.odomc.pose.pose.orientation.y = newodomc[2]
-                    self.odomc.pose.pose.orientation.z = newodomc[3]
-                    self.odomc.pose.pose.orientation.w = newodomc[0]
+                    self.odomc.pose.pose.orientation.x = new_orientation[1]
+                    self.odomc.pose.pose.orientation.y = new_orientation[2]
+                    self.odomc.pose.pose.orientation.z = new_orientation[3]
+                    self.odomc.pose.pose.orientation.w = new_orientation[0]
 
 
                     self.odom_data_prev = self.odom_data
@@ -98,13 +98,11 @@ class OdometryCorrector:
 
                     self.odomc.header.stamp = self.stamp #rospy.Time.now()
                     self.publisher.publish(self.odomc)
-                self.publish_tf()
 
             elif self.odom_data is not None:
                 rospy.loginfo('Setting initial data')
                 self.odomc = self.odom_data
-                self.odomc.header.frame_id = '/odomc'
-                self.odomc.child_frame_id = '/odom'
+                self.odomc.header.frame_id = '/odom'
                 self.odomc.header.stamp = self.stamp #rospy.Time.now()
                 self.publisher.publish(self.odomc)
                 self.odom_data_prev = self.odom_data

@@ -44,8 +44,8 @@ class MapBuilder:
         self.translation_threshold = 0.2
         self.rotation_threshold = 2.5
         rospy.init_node('listen', anonymous=True)
-        self.publisher = rospy.Publisher('/icp_map', PointCloud2, queue_size=10)
-        self.transform_publisher = rospy.Publisher('/icp_transform', Odometry, queue_size=10)
+        self.publisher = rospy.Publisher('/icp/map', PointCloud2, queue_size=10)
+        self.transform_publisher = rospy.Publisher('/icp/transform', Odometry, queue_size=10)
         self.new_odom = None
         self.new_scan = None
         self.cloud_out_subscriber = None
@@ -55,10 +55,10 @@ class MapBuilder:
         self.old_odom = None
 
     def laser_listen_once(self):
-        self.cloud_out_subscriber = rospy.Subscriber('/cloud_out_global', PointCloud2, self.cloud_out_callback)
+        self.cloud_out_subscriber = rospy.Subscriber('/cloud_out', PointCloud2, self.cloud_out_callback)
 
     def odom_listen_once(self):
-        self.odom_subscriber = rospy.Subscriber('/odomc', Odometry, self.odom_callback)
+        self.odom_subscriber = rospy.Subscriber('/odom', Odometry, self.odom_callback)
 
     def cloud_out_callback(self, data):
         plotscan = False
@@ -80,7 +80,6 @@ class MapBuilder:
         #self.odom_subscriber.unregister()
         self.new_odom = data
 
-
     def pointcloud2_to_list(self, cloud):
         gen = PCL.read_points(cloud, skip_nans=True, field_names=('x', 'y', 'z'))
         list_of_tuples = list(gen)
@@ -90,7 +89,7 @@ class MapBuilder:
         pcloud = PointCloud2()
         pcloud = PCL.create_cloud_xyz32(pcloud.header, points)
         pcloud.header.stamp = rospy.Time.now()
-        pcloud.header.frame_id = '/odomc'
+        pcloud.header.frame_id = '/odom'
         return pcloud
 
     def publish_map(self):
@@ -141,27 +140,16 @@ class MapBuilder:
                     new_scan_transformed, total_t, total_q, array_t, array_q= self.icp.iterative_closest_point(reference=m, source=self.new_scan, initial=[1, 0, 0, 0, 0, 0, 0],
                                                      number_of_iterations=10)
                     self.map.extend(new_scan_transformed)
-                    '''transform = Odometry()
-                    transform.header.frame_id = '/odomc'
+                    transform = Odometry()
+                    transform.header.frame_id = '/odom'
                     transform.pose.pose.position.x = total_t[0]
                     transform.pose.pose.position.y = total_t[1]
                     transform.pose.pose.position.z = total_t[2]
                     transform.pose.pose.orientation.x = total_q[1]
                     transform.pose.pose.orientation.y = total_q[2]
                     transform.pose.pose.orientation.z = total_q[3]
-                    transform.pose.pose.orientation.w = total_q[0]'''
-                    rospy.loginfo('Total Q: ' + str(numpy.around(total_q, 3)))
-                    for i in range(len(total_q)):
-                        transform = Odometry()
-                        transform.header.frame_id = '/odomc'
-                        transform.pose.pose.position.x = array_t[i][0]
-                        transform.pose.pose.position.y = array_t[i][1]
-                        transform.pose.pose.position.z = array_t[i][2]
-                        transform.pose.pose.orientation.x = array_q[i][1]
-                        transform.pose.pose.orientation.y = array_q[i][2]
-                        transform.pose.pose.orientation.z = array_q[i][3]
-                        transform.pose.pose.orientation.w = array_q[i][0]
-                        self.transform_publisher.publish(transform)
+                    transform.pose.pose.orientation.w = total_q[0]
+
                 else:
                     for i in range(len(self.new_scan)):
                         self.new_scan[i] = (self.new_scan[i][0], self.new_scan[i][1], 0)
@@ -190,13 +178,10 @@ class IterativeClosestPoint:
 
         # Perform initial translation
         q = initial[0:4]
-        rotation_matrix = self.compute_rotation_matrix(q)
-        translation_vector = numpy.matrix(initial[4:7]).getT()
-        total_t, total_q = translation_vector, q
-        array_t, array_q = [list(translation_vector.flat)], [q]
-        for i in range(len(source_n)):
-            source_n[i] = list((rotation_matrix * numpy.matrix(source_n[i]).getT() + translation_vector).flat)
-            source_n[i][2] = 0
+        t = initial[4:7]
+        total_t, total_q = [0, 0, 0], [1, 0, 0, 0]
+        array_t, array_q = [], []
+        source_n = IterativeClosestPoint.transform_scan(source_n, t, q)
         #rospy.loginfo('Starting ICP')
         for itr in range(number_of_iterations):
             #reference_n, source_n, dist,  not_matched_reference, not_matched_source, multi_matched_index = self.nearest_neighbor_munkres(reference_n, source_n)
@@ -239,14 +224,11 @@ class IterativeClosestPoint:
 
             q = list(numpy.matrix(v[:, max_eigenvalue_index]).flat)
 
-            rotation_matrix = self.compute_rotation_matrix(q)
-            #print('q = ', q)
+            rotation_matrix = IterativeClosestPoint.compute_rotation_matrix(q)
             translation_vector = reference_mean - rotation_matrix * source_mean
 
-
             total_t = numpy.add(total_t, translation_vector)
-            #rospy.loginfo('T: ' + str(numpy.around(total_t, decimals=3)))
-            total_q = self.multiply_quaternion(q, total_q)
+            total_q = IterativeClosestPoint.multiply_quaternion(q, total_q)
             array_t.append(list(translation_vector.flat))
             array_q.append(q)
 
@@ -273,9 +255,10 @@ class IterativeClosestPoint:
                 if percent_difference1 < self.convergence_threshold and percent_difference2 < self.convergence_threshold and percent_difference3 < self.convergence_threshold:
                     break
         del self.total_distances[:]
-        return source_n, total_t, total_q, array_t, array_q
+        return source_n, list(total_t.flat), total_q, array_t, array_q
 
-    def compute_rotation_matrix(self, q):
+    @staticmethod
+    def compute_rotation_matrix(q):
         return numpy.matrix([
             [q[0] ** 2 + q[1] ** 2 - q[2] ** 2 - q[3] ** 2, 2 * (q[1] * q[2] - q[0] * q[3]),
              2 * (q[1] * q[3] + q[0] * q[2])],
@@ -285,12 +268,22 @@ class IterativeClosestPoint:
              q[0] ** 2 + q[3] ** 2 - q[1] ** 2 - q[2] ** 2]
         ])
 
+    @staticmethod
+    def transform_scan(scan, t, q):
+        new_scan = []
+        rotation_matrix = IterativeClosestPoint.compute_rotation_matrix(q)
+        translation_vector = numpy.matrix(t).getT()
+        for i in range(len(scan)):
+            new_scan.append(list((rotation_matrix * numpy.matrix(scan[i]).getT() + translation_vector).flat))
+        return new_scan
+
     '''
     performs multiplication q*r
     Where r is the first rotation applied
     and q is the second rotation applied
     '''
-    def multiply_quaternion(self, q, r):
+    @staticmethod
+    def multiply_quaternion(q, r):
         result = [0, 0, 0, 0]
         result[0] = r[0] * q[0] - r[1] * q[1] - r[2] * q[2] - r[3] * q[3]
         result[1] = r[0] * q[1] + r[1] * q[0] - r[2] * q[3] + r[3] * q[2]
