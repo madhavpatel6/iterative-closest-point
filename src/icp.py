@@ -43,22 +43,28 @@ class MapBuilder:
         self.map = []
         self.translation_threshold = 0.2
         self.rotation_threshold = 2.5
-        rospy.init_node('listen', anonymous=True)
+        rospy.init_node('MapBuilder')
         self.publisher = rospy.Publisher('/icp/map', PointCloud2, queue_size=10)
         self.transform_publisher = rospy.Publisher('/icp/transform', Odometry, queue_size=10)
         self.new_odom = None
         self.new_scan = None
+        self.new_odomc = None
         self.cloud_out_subscriber = None
         self.odom_subscriber = None
+        self.odomc_subscriber = None
         self.frame = None
         self.icp_completed = True
         self.old_odom = None
+        rospy.sleep(1)
 
     def laser_listen_once(self):
         self.cloud_out_subscriber = rospy.Subscriber('/cloud_out', PointCloud2, self.cloud_out_callback)
 
     def odom_listen_once(self):
         self.odom_subscriber = rospy.Subscriber('/odom', Odometry, self.odom_callback)
+
+    def odomc_listen_once(self):
+        self.odomc_subscriber = rospy.Subscriber('/odomc', Odometry, self.odomc_callback)
 
     def cloud_out_callback(self, data):
         plotscan = False
@@ -79,6 +85,9 @@ class MapBuilder:
     def odom_callback(self, data):
         #self.odom_subscriber.unregister()
         self.new_odom = data
+
+    def odomc_callback(self, data):
+        self.new_odomc = data
 
     def pointcloud2_to_list(self, cloud):
         gen = PCL.read_points(cloud, skip_nans=True, field_names=('x', 'y', 'z'))
@@ -129,17 +138,23 @@ class MapBuilder:
         rospy.loginfo('Starting Map Building.')
         self.laser_listen_once()
         self.odom_listen_once()
+        self.odomc_listen_once()
         while not rospy.is_shutdown():
-            if self.new_scan is not None and self.check_movement():
-                print('Updated old odom')
+            if self.new_scan is not None and self.check_movement() and self.new_odomc is not None:
                 self.old_odom = self.new_odom
                 if len(self.map) != 0:
                     m = self.map
                     #pos = self.new_odom.pose.pose.position
                     #m = get_subset_of_points(map=self.map, odom=[pos.x, pos.y, pos.z], radius=20)
-                    new_scan_transformed, total_t, total_q, array_t, array_q= self.icp.iterative_closest_point(reference=m, source=self.new_scan, initial=[1, 0, 0, 0, 0, 0, 0],
+                    initial_guess = [self.new_odomc.pose.pose.orientation.w, self.new_odomc.pose.pose.orientation.x,
+                                     self.new_odomc.pose.pose.orientation.y, self.new_odomc.pose.pose.orientation.z,
+                                     self.new_odomc.pose.pose.position.x, self.new_odomc.pose.pose.position.y,
+                                     self.new_odomc.pose.pose.position.z]
+                    print 'Initial guess', initial_guess
+                    new_scan_transformed, total_t, total_q, array_t, array_q= self.icp.iterative_closest_point(reference=m, source=self.new_scan, initial=initial_guess,
                                                      number_of_iterations=10)
                     self.map.extend(new_scan_transformed)
+                    print 'Total T, R', total_t, total_q
                     transform = Odometry()
                     transform.header.frame_id = '/odom'
                     transform.pose.pose.position.x = total_t[0]
@@ -149,11 +164,14 @@ class MapBuilder:
                     transform.pose.pose.orientation.y = total_q[2]
                     transform.pose.pose.orientation.z = total_q[3]
                     transform.pose.pose.orientation.w = total_q[0]
-
+                    self.transform_publisher.publish(transform)
                 else:
                     for i in range(len(self.new_scan)):
                         self.new_scan[i] = (self.new_scan[i][0], self.new_scan[i][1], 0)
-                    self.map = self.new_scan
+                    t = [self.new_odomc.pose.pose.position.x, self.new_odomc.pose.pose.position.y, self.new_odomc.pose.pose.position.z]
+                    q = [self.new_odomc.pose.pose.orientation.w, self.new_odomc.pose.pose.orientation.x, self.new_odomc.pose.pose.orientation.y, self.new_odomc.pose.pose.orientation.z]
+                    transformed_scan = IterativeClosestPoint.transform_scan(self.new_scan, t, q)
+                    self.map = transformed_scan
 
                 self.new_scan = None
                 self.new_odom = None
@@ -179,7 +197,7 @@ class IterativeClosestPoint:
         # Perform initial translation
         q = initial[0:4]
         t = initial[4:7]
-        total_t, total_q = [0, 0, 0], [1, 0, 0, 0]
+        total_t, total_q = numpy.matrix([0, 0, 0]).getT(), [1, 0, 0, 0]
         array_t, array_q = [], []
         source_n = IterativeClosestPoint.transform_scan(source_n, t, q)
         #rospy.loginfo('Starting ICP')

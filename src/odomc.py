@@ -14,7 +14,7 @@ Point = namedlist('Point', 'x y z')
 class OdometryCorrector:
     def __init__(self):
         self.publisher = rospy.Publisher('/odomc', Odometry, queue_size=10)
-        self.tf_publisher = rospy.Publisher('/tf', tf.msg.tfMessage, queue_size=10)
+        #self.tf_publisher = rospy.Publisher('/tf', tf.msg.tfMessage, queue_size=10)
         self.odom_data = None
         self.odom_data_prev = None
         self.icp_data = None
@@ -37,7 +37,7 @@ class OdometryCorrector:
         self.odom_subscriber = rospy.Subscriber('/odom', Odometry, self.callback_odom, queue_size=10)
 
     def subscribe_once_icp(self):
-        self.icp_subscriber = rospy.Subscriber('/icp_transform', Odometry, self.callback_icp, queue_size=10)
+        self.icp_subscriber = rospy.Subscriber('/icp/transform', Odometry, self.callback_icp, queue_size=10)
 
     def run(self):
         self.subscribe_once_icp()
@@ -164,7 +164,7 @@ class OdometryCorrector:
         mag = math.sqrt(q[0]**2 + q[1]**2 + q[2]**2 + q[3]**2)
         return [q[0]/mag, q[1]/mag, q[2]/mag, q[3]/mag]
 def main():
-    rospy.init_node('odomc')
+    rospy.init_node('OdometryCorrector')
     oc = OdometryCorrector()
     oc.run()
 
