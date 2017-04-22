@@ -39,7 +39,7 @@ def get_subset_of_points(map, odom, radius):
 
 class MapBuilder:
     def __init__(self):
-        self.icp = IterativeClosestPoint(zero_threshold=0.1, convergence_threshold=0.0001, nearest_neighbor_upperbound=0.5)
+        self.icp = IterativeClosestPoint(zero_threshold=0.1, convergence_threshold=0.0001, nearest_neighbor_upperbound=0.1)
         self.map = []
         self.translation_threshold = 0.2
         self.rotation_threshold = 2.5
@@ -55,6 +55,7 @@ class MapBuilder:
         self.frame = None
         self.icp_completed = True
         self.old_odom = None
+        self.new_scan_stamp = None
         rospy.sleep(1)
 
     def laser_listen_once(self):
@@ -65,8 +66,10 @@ class MapBuilder:
 
     def odomc_listen_once(self):
         self.odomc_subscriber = rospy.Subscriber('/odomc', Odometry, self.odomc_callback)
-
+    
     def cloud_out_callback(self, data):
+        if not self.icp_completed:
+            return
         plotscan = False
         if plotscan:
             plt.ion()
@@ -74,6 +77,7 @@ class MapBuilder:
         self.frame = data.header.frame_id
         self.seq = data.header.seq
         self.new_scan = self.pointcloud2_to_list(data)
+        self.new_scan_stamp = data.header.stamp
         if plotscan:
             for p in self.new_scan:
                 plt.scatter(p[0], p[1], s=5)
@@ -84,10 +88,12 @@ class MapBuilder:
 
     def odom_callback(self, data):
         #self.odom_subscriber.unregister()
-        self.new_odom = data
+        if self.icp_completed:
+            self.new_odom = data
 
     def odomc_callback(self, data):
-        self.new_odomc = data
+        if self.icp_completed:
+            self.new_odomc = data
 
     def pointcloud2_to_list(self, cloud):
         gen = PCL.read_points(cloud, skip_nans=True, field_names=('x', 'y', 'z'))
@@ -141,20 +147,22 @@ class MapBuilder:
         self.odomc_listen_once()
         while not rospy.is_shutdown():
             if self.new_scan is not None and self.check_movement() and self.new_odomc is not None:
+                self.icp_completed = False
                 self.old_odom = self.new_odom
                 if len(self.map) != 0:
                     m = self.map
                     #pos = self.new_odom.pose.pose.position
                     #m = get_subset_of_points(map=self.map, odom=[pos.x, pos.y, pos.z], radius=20)
+                    #print 'Running ICP with delta time odomc - scan', self.new_odomc.header.stamp.secs,':', self.new_odomc.header.stamp.nsecs, ' -', self.new_scan_stamp.secs, self.new_scan_stamp.nsecs, ' =', self.new_odomc.header.stamp.secs - self.new_scan_stamp.secs, ':', (self.new_odomc.header.stamp.nsecs - self.new_scan_stamp.nsecs)/(1000000000.0)
                     initial_guess = [self.new_odomc.pose.pose.orientation.w, self.new_odomc.pose.pose.orientation.x,
                                      self.new_odomc.pose.pose.orientation.y, self.new_odomc.pose.pose.orientation.z,
                                      self.new_odomc.pose.pose.position.x, self.new_odomc.pose.pose.position.y,
                                      self.new_odomc.pose.pose.position.z]
-                    print 'Initial guess', initial_guess
+                    #print 'Initial guess', initial_guess
                     new_scan_transformed, total_t, total_q, array_t, array_q= self.icp.iterative_closest_point(reference=m, source=self.new_scan, initial=initial_guess,
                                                      number_of_iterations=10)
                     self.map.extend(new_scan_transformed)
-                    print 'Total T, R', total_t, total_q
+                    #print 'Total T, R', total_t, total_q
                     transform = Odometry()
                     transform.header.frame_id = '/odom'
                     transform.pose.pose.position.x = total_t[0]
@@ -175,6 +183,7 @@ class MapBuilder:
 
                 self.new_scan = None
                 self.new_odom = None
+                self.icp_completed = True
                 self.publish_map()
                 #self.laser_listen_once()
                 #self.odom_listen_once()
@@ -193,7 +202,7 @@ class IterativeClosestPoint:
 
     def iterative_closest_point(self, reference, source, initial, number_of_iterations):
         reference_n, source_n = reference, source
-
+        plot_points_2d(reference_n, source_n)
         # Perform initial translation
         q = initial[0:4]
         t = initial[4:7]
@@ -467,19 +476,14 @@ def rotate_2d(origin, points, angle):
 def plot_points_2d(a, b):
     plt.ion()
     plt.clf()
-    a_t = copy.deepcopy(a)
-    b_t = copy.deepcopy(b)
-    if len(a_t[0]) == 3:
-        for row in a_t:
-            del row[2]
-        for row in b_t:
-            del row[2]
-    plt.plot(*zip(*a_t), marker='o', color='r', ls='')
-    plt.plot(*zip(*b_t), marker='x', color='b', ls='')
+    for p in a:
+        plt.plot(x=[p[0]], y=[p[1]], marker='o', color='r', ls='')
+    for p in b:
+        plt.plot(x=[p[0]], y=[p[1]] , marker='x', color='b', ls='')
     red = mpatches.Patch(color='red', label='Model Set')
     blue = mpatches.Patch(color='blue', label='Measured Set')
     plt.legend(handles=[red, blue])
-
+    plt.show()
 
 
 if __name__ == '__main__':
