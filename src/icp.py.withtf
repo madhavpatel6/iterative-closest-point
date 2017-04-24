@@ -40,7 +40,7 @@ def get_subset_of_points(map, odom, radius):
 
 class MapBuilder:
     def __init__(self):
-        self.icp = IterativeClosestPoint(zero_threshold=0.1, convergence_threshold=0.0001, nearest_neighbor_upperbound=0.5)
+        self.icp = IterativeClosestPoint(zero_threshold=0.1, convergence_threshold=0.0001, nearest_neighbor_upperbound=1)
         self.map = []
         self.translation_threshold = 0.2
         self.rotation_threshold = 2.5
@@ -58,10 +58,10 @@ class MapBuilder:
         self.icp_completed = True
         self.old_odom = None
         self.new_scan_stamp = None
-        rospy.sleep(1)
+        rospy.sleep(3)
 
     def laser_listen_once(self):
-        self.cloud_out_subscriber = rospy.Subscriber('/cloud_out', PointCloud2, self.cloud_out_callback)
+        self.cloud_out_subscriber = rospy.Subscriber('/cloud_out_global', PointCloud2, self.cloud_out_callback)
 
     def odom_listen_once(self):
         self.odom_subscriber = rospy.Subscriber('/odom', Odometry, self.odom_callback)
@@ -157,10 +157,11 @@ class MapBuilder:
                     m = self.map
                     #pos = self.new_odom.pose.pose.position
                     #m = get_subset_of_points(map=self.map, odom=[pos.x, pos.y, pos.z], radius=20)\
-                    initial_guess = [self.new_odomc.pose.pose.orientation.w, self.new_odomc.pose.pose.orientation.x,
-                                     self.new_odomc.pose.pose.orientation.y, self.new_odomc.pose.pose.orientation.z,
-                                     self.new_odomc.pose.pose.position.x, self.new_odomc.pose.pose.position.y,
-                                     self.new_odomc.pose.pose.position.z]
+                    initial_guess = [1, 0, 0, 0, 0, 0, 0]
+                    #initial_guess = [self.new_odomc.pose.pose.orientation.w, self.new_odomc.pose.pose.orientation.x,
+                    #                 self.new_odomc.pose.pose.orientation.y, self.new_odomc.pose.pose.orientation.z,
+                    #                 self.new_odomc.pose.pose.position.x, self.new_odomc.pose.pose.position.y,
+                    #                 self.new_odomc.pose.pose.position.z]
                     new_scan_transformed, total_t, total_q, array_t, array_q= self.icp.iterative_closest_point(reference=m, source=self.new_scan, initial=initial_guess,
                                                      number_of_iterations=10)
                     self.map.extend(new_scan_transformed)
@@ -177,8 +178,10 @@ class MapBuilder:
                 else:
                     for i in range(len(self.new_scan)):
                         self.new_scan[i] = (self.new_scan[i][0], self.new_scan[i][1], 0)
-                    t = [self.new_odomc.pose.pose.position.x, self.new_odomc.pose.pose.position.y, self.new_odomc.pose.pose.position.z]
-                    q = [self.new_odomc.pose.pose.orientation.w, self.new_odomc.pose.pose.orientation.x, self.new_odomc.pose.pose.orientation.y, self.new_odomc.pose.pose.orientation.z]
+                    #t = [self.new_odomc.pose.pose.position.x, self.new_odomc.pose.pose.position.y, self.new_odomc.pose.pose.position.z]
+                    #q = [self.new_odomc.pose.pose.orientation.w, self.new_odomc.pose.pose.orientation.x, self.new_odomc.pose.pose.orientation.y, self.new_odomc.pose.pose.orientation.z]
+                    t = [0, 0, 0]
+                    q = [1, 0, 0, 0]
                     transformed_scan = IterativeClosestPoint.transform_scan(self.new_scan, t, q)
                     self.map = transformed_scan
 
@@ -212,6 +215,7 @@ class IterativeClosestPoint:
         array_t, array_q = [], []
         source_n = IterativeClosestPoint.transform_scan(source_n, t, q)
         self.test.publish(MapBuilder.list_to_pointcloud2(source_n))
+        plot_points_2d(reference, source)
         #rospy.loginfo('Starting ICP')
         for itr in range(number_of_iterations):
             #reference_n, source_n, dist,  not_matched_reference, not_matched_source, multi_matched_index = self.nearest_neighbor_munkres(reference_n, source_n)
@@ -486,7 +490,8 @@ def plot_points_2d(a, b):
     red = mpatches.Patch(color='red', label='Model Set')
     blue = mpatches.Patch(color='blue', label='Measured Set')
     plt.legend(handles=[red, blue])
-    plt.waitforbuttonpress()
+    plt.axis('equal')
+    plt.pause(3)
 
 
 if __name__ == '__main__':
