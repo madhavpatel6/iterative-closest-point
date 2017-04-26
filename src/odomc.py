@@ -7,6 +7,7 @@ import math
 import tf
 import tf.msg
 import geometry_msgs.msg
+import numpy
 from sensor_msgs.msg import PointCloud2, PointField
 from namedlist import namedlist
 import message_filters
@@ -16,7 +17,7 @@ Point = namedlist('Point', 'x y z')
 class OdometryCorrector:
     def __init__(self):
         self.publisher = rospy.Publisher('/odomc', Odometry, queue_size=10)
-        #self.tf_publisher = rospy.Publisher('/tf', tf.msg.tfMessage, queue_size=10)
+        self.tf_publisher = rospy.Publisher('/tf', tf.msg.tfMessage, queue_size=10)
         self.odom_data = None
         self.odom_data_prev = None
         self.icp_data = None
@@ -76,12 +77,12 @@ class OdometryCorrector:
                     tm = rospy.Time.now()
                     self.odomc.header.stamp = tm
                     self.publisher.publish(self.odomc)
+                    self.publish_tf()
                     self.odom_data_prev = self.odom_data
                     self.odom_data = None
                 if self.icp_data is not None:
                     # apply icp transform
-                    pass
-                    '''self.odomc.pose.pose.position.x += self.icp_data.pose.pose.position.x
+                    self.odomc.pose.pose.position.x += self.icp_data.pose.pose.position.x
                     self.odomc.pose.pose.position.y += self.icp_data.pose.pose.position.y
                     self.odomc.pose.pose.position.z += self.icp_data.pose.pose.position.z
                     # Update the stored total translation
@@ -104,7 +105,7 @@ class OdometryCorrector:
                     self.icp_data = None
 
                     self.odomc.header.stamp = rospy.Time.now()
-                    self.publisher.publish(self.odomc)'''
+                    self.publisher.publish(self.odomc)
             elif self.odom_data is not None:
                 rospy.loginfo('Setting initial data')
                 self.odomc = Odometry()
@@ -115,12 +116,14 @@ class OdometryCorrector:
                 self.odomc.pose.pose.orientation.x = self.odom_data.pose.pose.orientation.x
                 self.odomc.pose.pose.orientation.y = self.odom_data.pose.pose.orientation.y
                 self.odomc.pose.pose.orientation.z = self.odom_data.pose.pose.orientation.z
-                self.odomc.header.frame_id = '/odom'
+                self.odomc.header.frame_id = '/map'
+                self.odomc.child_frame_id = '/odom'
                 tm = rospy.Time.now()
                 self.odomc.header.stamp = tm
                 self.publisher.publish(self.odomc)
                 self.odom_data_prev = self.odom_data
                 self.odom_data = None
+
 
 
     def multiply_quaternion(self, q, r):
@@ -141,21 +144,79 @@ class OdometryCorrector:
         ]
         return inverse
 
+    def compute_rotation_matrix(self, q):
+        return numpy.matrix([
+            [q[0] ** 2 + q[1] ** 2 - q[2] ** 2 - q[3] ** 2, 2 * (q[1] * q[2] - q[0] * q[3]),2 * (q[1] * q[3] + q[0] * q[2])],
+            [2 * (q[1] * q[2] + q[0] * q[3]), q[0] ** 2 + q[2] ** 2 - q[1] ** 2 - q[3] ** 2,2 * (q[2] * q[3] - q[0] * q[1])],
+            [2 * (q[1] * q[3] - q[0] * q[2]), 2 * (q[2] * q[3] + q[0] * q[1]),q[0] ** 2 + q[3] ** 2 - q[1] ** 2 - q[2] ** 2]
+        ])
+
+    def compute_quaternion(self, r):
+        trace = r[0, 0] + r[1, 1] + r[2, 2]
+        q = [1, 0, 0, 0]
+        if trace > 0:
+            k = 0.5 / math.sqrt(1 + trace)
+            q[0] = k * (r[1, 2] - r[2, 1])
+            q[1] = k * (r[2, 0] - r[0, 2])
+            q[2] = k * (r[0, 1] - r[1, 0])
+            q[3] = 0.25 / k
+        elif r[0, 0] > r[1, 1] and r[0, 0] > r[2, 2]:
+            k = 0.5 / math.sqrt(1 + r[0, 0] - r[1, 1] - r[2, 2])
+            q[0] = 0.25 / k
+            q[1] = k * (r[1, 0] + r[0, 1])
+            q[2] = k * (r[2, 0] + r[0, 2])
+            q[3] = k * (r[1, 2] - r[2, 1])
+        elif r[1, 1] > r[2, 2]:
+            k = 0.5 / math.sqrt(1 + r[1, 1] - r[0, 0] - r[2, 2])
+            q[0] = k * (r[1, 0] + r[0, 1])
+            q[1] = 0.25 / k
+            q[2] = k * (r[2, 1] + r[1, 2])
+            q[3] = k * (r[2, 0] - r[0, 2])
+        else:
+            k = 0.5/math.sqrt(1 + r[2,2] - r[0,0] - r[1,1])
+            q[0] = k * (r[2, 0] + r[0, 2])
+            q[1] = k * (r[2, 1] + r[1, 2])
+            q[2] = 0.25 / k
+            q[3] = k * (r[0, 1] - r[1, 0])
+        return [q[3], q[0], q[1], q[2]]
     def publish_tf(self):
         t = geometry_msgs.msg.TransformStamped()
-        t.header.frame_id = '/odomc'
+        t.header.frame_id = '/map'
         t.header.stamp = rospy.Time.now()
-        t.child_frame_id = '/base_link'
+        t.child_frame_id = '/odom'
+        quaternion = self.inverse_quaternion(self.odomc_quaternion)
+        translation = list((self.compute_rotation_matrix(quaternion) * numpy.matrix(
+            [[self.odomc_translation[0]], [self.odomc_translation[1]], [self.odomc_translation[2]]])).flat)
+        #translation = self.odomc_translation
+        print 'Total', numpy.around(translation,3), ' ', numpy.around(quaternion, 3)
+        '''t.transform.translation.x = -1*translation[0]
+        t.transform.translation.y = -1*translation[1]
+        t.transform.translation.z = -1*translation[2]
 
-        t.transform.translation.x = self.odomc.pose.pose.position.x
-        t.transform.translation.y = self.odomc.pose.pose.position.y
-        t.transform.translation.z = self.odomc.pose.pose.position.z
-        t.transform.rotation.w = self.odomc.pose.pose.orientation.w
-        t.transform.rotation.x = self.odomc.pose.pose.orientation.x
-        t.transform.rotation.y = self.odomc.pose.pose.orientation.y
-        t.transform.rotation.z = self.odomc.pose.pose.orientation.z
 
+        t.transform.rotation.w = quaternion[0]
+        t.transform.rotation.x = quaternion[1]
+        t.transform.rotation.y = quaternion[2]
+        t.transform.rotation.z = quaternion[3]'''
 
+        rodom = self.compute_rotation_matrix([self.odom_data.pose.pose.orientation.w, self.odom_data.pose.pose.orientation.x, self.odom_data.pose.pose.orientation.y,
+             self.odom_data.pose.pose.orientation.z])
+        rodomc = self.compute_rotation_matrix([self.odomc.pose.pose.orientation.w, self.odomc.pose.pose.orientation.x, self.odomc.pose.pose.orientation.y,
+             self.odomc.pose.pose.orientation.z])
+        rt = rodomc.getT() * rodom
+        v = [self.odom_data.pose.pose.position.x - self.odomc.pose.pose.position.x,
+             self.odom_data.pose.pose.position.y - self.odomc.pose.pose.position.y,
+             self.odom_data.pose.pose.position.z - self.odomc.pose.pose.position.z]
+        tr = list((numpy.matrix(v) * rodomc).flat)
+        q = self.compute_quaternion(rt)
+        print 'Rotal', numpy.around(tr, 3), ' ', numpy.around(q, 3)
+        t.transform.translation.x = tr[0]
+        t.transform.translation.y = tr[1]
+        t.transform.translation.z = tr[2]
+        t.transform.rotation.w = q[0]
+        t.transform.rotation.x = q[1]
+        t.transform.rotation.y = q[2]
+        t.transform.rotation.z = q[3]
         tfm = tf.msg.tfMessage([t])
         self.tf_publisher.publish(tfm)
 
