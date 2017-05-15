@@ -17,7 +17,7 @@ Point = namedlist('Point', 'x y z')
 class OdometryCorrector:
     def __init__(self):
         self.publisher = rospy.Publisher('/odomc', Odometry, queue_size=10)
-        self.tf_publisher = rospy.Publisher('/tf', tf.msg.tfMessage, queue_size=10)
+        #self.tf_publisher = rospy.Publisher('/tf', tf.msg.tfMessage, queue_size=10)
         self.odom_data = None
         self.odom_data_prev = None
         self.icp_data = None
@@ -75,9 +75,8 @@ class OdometryCorrector:
                     self.odomc.pose.pose.orientation.w = new_orientation[0]
 
                     tm = rospy.Time.now()
-                    self.odomc.header.stamp = tm
+                    self.odomc.header.stamp = self.stamp
                     self.publisher.publish(self.odomc)
-                    self.publish_tf()
                     self.odom_data_prev = self.odom_data
                     self.odom_data = None
                 if self.icp_data is not None:
@@ -104,7 +103,7 @@ class OdometryCorrector:
                     self.odomc_quaternion = self.multiply_quaternion(q, self.odomc_quaternion)
                     self.icp_data = None
 
-                    self.odomc.header.stamp = rospy.Time.now()
+                    self.odomc.header.stamp = self.stamp
                     self.publisher.publish(self.odomc)
             elif self.odom_data is not None:
                 rospy.loginfo('Setting initial data')
@@ -116,10 +115,10 @@ class OdometryCorrector:
                 self.odomc.pose.pose.orientation.x = self.odom_data.pose.pose.orientation.x
                 self.odomc.pose.pose.orientation.y = self.odom_data.pose.pose.orientation.y
                 self.odomc.pose.pose.orientation.z = self.odom_data.pose.pose.orientation.z
-                self.odomc.header.frame_id = '/map'
-                self.odomc.child_frame_id = '/odom'
+                self.odomc.header.frame_id = 'map'
+                self.odomc.child_frame_id = 'odom'
                 tm = rospy.Time.now()
-                self.odomc.header.stamp = tm
+                self.odomc.header.stamp = self.stamp
                 self.publisher.publish(self.odomc)
                 self.odom_data_prev = self.odom_data
                 self.odom_data = None
@@ -181,9 +180,9 @@ class OdometryCorrector:
         return [q[3], q[0], q[1], q[2]]
     def publish_tf(self):
         t = geometry_msgs.msg.TransformStamped()
-        t.header.frame_id = '/map'
+        t.header.frame_id = 'map'
         t.header.stamp = rospy.Time.now()
-        t.child_frame_id = '/odom'
+        t.child_frame_id = 'odom'
         quaternion = self.inverse_quaternion(self.odomc_quaternion)
         translation = list((self.compute_rotation_matrix(quaternion) * numpy.matrix(
             [[self.odomc_translation[0]], [self.odomc_translation[1]], [self.odomc_translation[2]]])).flat)
@@ -207,8 +206,17 @@ class OdometryCorrector:
         v = [self.odom_data.pose.pose.position.x - self.odomc.pose.pose.position.x,
              self.odom_data.pose.pose.position.y - self.odomc.pose.pose.position.y,
              self.odom_data.pose.pose.position.z - self.odomc.pose.pose.position.z]
+
         tr = list((numpy.matrix(v) * rodomc).flat)
         q = self.compute_quaternion(rt)
+        '''
+        rt = rodom.getT() * rodomc
+        v = [self.odomc.pose.pose.position.x - self.odom_data.pose.pose.position.x,
+             self.odomc.pose.pose.position.y - self.odom_data.pose.pose.position.y,
+             self.odomc.pose.pose.position.z - self.odom_data.pose.pose.position.z]
+        tr = list((numpy.matrix(v)*rodom).flat)
+        q = self.compute_quaternion(rt)
+        '''
         print 'Rotal', numpy.around(tr, 3), ' ', numpy.around(q, 3)
         t.transform.translation.x = tr[0]
         t.transform.translation.y = tr[1]
